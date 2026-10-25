@@ -30,6 +30,7 @@ const state = {
   ui: loadJSON(UI_KEY, { framing: 'full', subjectH: 1.7, hfov: 66, opacity: 0.55 }),
   camOn: false,
   coach: null,
+  coachLoad: null,
   modelStatus: '未加载',
   tilt: null,
   lastAnalysis: null,
@@ -327,15 +328,54 @@ const stage = $('#stage');
 const overlay = $('#overlay');
 const octx = overlay.getContext('2d');
 
+const MODEL_TIMEOUT_MS = 30000;
+
+/** 给可能永久挂起的 Promise 加超时，超时后允许下次重试 */
+function withTimeout(promise, ms, onTimeout) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(onTimeout()), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function ensureCoach() {
   if (state.coach?.landmarker) return state.coach;
-  state.coach = state.coach || new Coach();
-  await state.coach.load({
-    model: state.settings.model,
-    onStatus: (s) => { state.modelStatus = s; $('#model-info').textContent = s; },
-  });
-  $('#model-info').textContent = '就绪';
-  return state.coach;
+  if (!state.coachLoad) {
+    state.coach = state.coach || new Coach();
+    state.coachLoad = state.coach.load({
+      model: state.settings.model,
+      onStatus: (s) => { state.modelStatus = s; $('#model-info').textContent = s; },
+    }).then(() => {
+      $('#model-info').textContent = '就绪';
+      return state.coach;
+    }).catch((err) => {
+      // 失败后清空，用户再点一次就会重新加载
+      state.coach = null;
+      state.coachLoad = null;
+      state.modelStatus = '未加载';
+      $('#model-info').textContent = '未加载';
+      throw err;
+    });
+  }
+  try {
+    return await withTimeout(state.coachLoad, MODEL_TIMEOUT_MS, () => {
+      const e = new Error('模型加载超时');
+      e.name = 'ModelTimeoutError';
+      return e;
+    });
+  } catch (err) {
+    state.coach = null;
+    state.coachLoad = null;
+    throw err;
+  }
+}
+
+function modelFailReason(err) {
+  if (err?.name === 'ModelTimeoutError') {
+    return '模型加载超过 30 秒还没好，可能是网络慢。再点一次「用照片测试」会重新加载。';
+  }
+  return `模型加载失败：${err?.message || '原因不明'}。再点一次会重新加载。`;
 }
 
 $('#btn-cam-start').addEventListener('click', async () => {
@@ -353,6 +393,13 @@ $('#btn-cam-start').addEventListener('click', async () => {
     $('#video').classList.toggle('mirror', cam.facing === 'user');
     startLoop();
   } catch (err) {
+    if (err?.name === 'ModelTimeoutError' || /模型|landmarker|wasm|task/i.test(err?.message || '')) {
+      const r = modelFailReason(err);
+      hint.textContent = r;
+      hint.hidden = false;
+      toast(r, 6000);
+      return;
+    }
     const reason = camFailReason(err);
     hint.textContent = `摄像头没起来：${reason}`;
     hint.hidden = false;
@@ -392,6 +439,8 @@ $('#btn-flip').addEventListener('click', async () => {
 $('#file-test').addEventListener('change', async (e) => {
   const f = e.target.files?.[0];
   if (!f) return;
+  const hint = $('#stage-hint');
+  hint.hidden = true;
   try {
     await ensureCoach();
     const url = URL.createObjectURL(f);
@@ -412,7 +461,13 @@ $('#file-test').addEventListener('change', async (e) => {
     state.staticResult = res;
     toast(res?.persons?.length ? `已载入照片，检测到 ${res.persons.length} 人` : '已载入照片，但没检测到人', 3600);
   } catch (err) {
-    toast(`载入失败：${err.message}`, 4000);
+    const isModel = err?.name === 'ModelTimeoutError' || /模型|landmarker|wasm|task/i.test(err?.message || '');
+    const msg = isModel ? modelFailReason(err) : `载入失败：${err?.message || '原因不明'}`;
+    if (isModel) {
+      hint.textContent = msg;
+      hint.hidden = false;
+    }
+    toast(msg, 5000);
   }
 });
 
