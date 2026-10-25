@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>取景教练 · Photo Coach</title>
+<link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
+<link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="dot"></span>取景教练 <em>v1.0</em></div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="spots" class="tab active">打卡点</button>
+    <button data-tab="poses" class="tab">姿势</button>
+    <button data-tab="camera" class="tab">拍摄</button>
+  </nav>
+  <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
+</header>
+
+<main>
+
+  <!-- ============ 打卡点 ============ -->
+  <section id="view-spots" class="view active">
+    <div class="map-wrap">
+      <div id="map"></div>
+      <div class="map-tools">
+        <button id="btn-locate" class="chip">📍 定位</button>
+        <button id="btn-basemap" class="chip">🛰 卫星</button>
+      </div>
+      <div id="geo-status" class="geo-status">未定位</div>
+    </div>
+    <aside class="side">
+      <div class="side-head">
+        <h2>附近机位</h2>
+        <div class="row-btns">
+          <button id="btn-add-spot" class="btn primary sm">＋ 存当前机位</button>
+          <button id="btn-poi" class="btn sm">搜附近</button>
+        </div>
+      </div>
+      <p class="hint-line" id="spot-hint">定位后可按距离排序。「搜附近」需要在高德控制台申请 Web 服务 Key 并在设置里填入。</p>
+      <ul id="spot-list" class="spot-list"></ul>
+      <div id="spot-detail" class="spot-detail empty">选一个机位看详情</div>
+    </aside>
+  </section>
+
+  <!-- ============ 姿势 ============ -->
+  <section id="view-poses" class="view">
+    <div class="filters">
+      <select id="f-scene">
+        <option value="all">全部场景</option>
+        <option value="single">单人</option>
+        <option value="couple">双人</option>
+        <option value="group">多人</option>
+      </select>
+      <select id="f-place">
+        <option value="all">全部地点</option>
+        <option value="city">城市街拍</option>
+        <option value="nature">山野海景</option>
+        <option value="indoor">室内</option>
+      </select>
+      <select id="f-style">
+        <option value="all">全部风格</option>
+        <option value="cool">酷感</option>
+        <option value="soft">温柔</option>
+        <option value="playful">活泼</option>
+      </select>
+      <span id="pose-count" class="muted"></span>
+    </div>
+    <div id="pose-grid" class="pose-grid"></div>
+  </section>
+
+  <!-- ============ 拍摄 ============ -->
+  <section id="view-camera" class="view cam-view">
+    <div class="stage" id="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <img id="still" alt="照片预览" hidden />
+      <canvas id="overlay"></canvas>
+      <div id="stage-placeholder" class="stage-placeholder">
+        <div class="big">📷</div>
+        <p>点「开启相机」开始。浏览器需要摄像头权限，仅本机使用，画面不会上传。</p>
+        <p id="stage-hint" class="stage-hint" hidden></p>
+        <div class="row-btns">
+          <button id="btn-cam-start" class="btn primary">开启相机</button>
+          <label class="btn file-btn">用照片测试<input id="file-test" type="file" accept="image/*" hidden /></label>
+        </div>
+      </div>
+      <div class="stage-hud top">
+        <span id="hud-fps" class="badge">-- fps</span>
+        <span id="hud-people" class="badge">0 人</span>
+        <button id="btn-flip" class="icon-btn small" title="切换前后摄像头">⇄</button>
+      </div>
+      <div class="stage-hud bottom">
+        <div id="score-ring" class="score-ring" hidden>
+          <svg viewBox="0 0 44 44"><circle class="bg" cx="22" cy="22" r="19"/><circle id="score-arc" class="arc" cx="22" cy="22" r="19"/></svg>
+          <span id="score-num">0</span>
+        </div>
+        <div id="hud-hints" class="hud-hints"></div>
+      </div>
+    </div>
+
+    <div class="cam-panel">
+      <div class="cp-block">
+        <div class="cp-title">当前参考姿势 <button id="btn-rand-pose" class="mini">换一个</button></div>
+        <div class="cp-pose"><canvas id="pose-mini" width="120" height="160"></canvas>
+          <div><div id="pose-name" class="pose-name">未选择</div><div id="pose-tips" class="pose-tips">在「姿势」页选一个</div></div>
+        </div>
+      </div>
+
+      <div class="cp-block">
+        <div class="cp-title">构图目标</div>
+        <div class="seg" id="seg-framing">
+          <button data-v="full" class="active">全身</button>
+          <button data-v="half">半身</button>
+          <button data-v="close">特写</button>
+        </div>
+        <label class="slider-row">参考骨架不透明度 <input id="opacity" type="range" min="0.1" max="1" step="0.05" value="0.55" /></label>
+        <label class="slider-row">主体身高峰值 <input id="subj-height" type="range" min="1.4" max="1.95" step="0.01" value="1.7" /><span id="subj-height-val">1.70 m</span></label>
+        <label class="slider-row">镜头水平视角 <input id="hfov" type="range" min="55" max="85" step="1" value="66" /><span id="hfov-val">66°</span></label>
+      </div>
+
+      <div class="cp-block">
+        <div class="cp-title">实时数据 <span class="muted" id="model-info">模型未加载</span></div>
+        <dl class="metrics">
+          <div><dt>估算距离</dt><dd id="m-dist">—</dd></div>
+          <div><dt>建议距离</dt><dd id="m-dist-target">—</dd></div>
+          <div><dt>主体占比</dt><dd id="m-fill">—</dd></div>
+          <div><dt>姿态吻合</dt><dd id="m-pose">—</dd></div>
+          <div><dt>曝光</dt><dd id="m-expo">—</dd></div>
+        </dl>
+      </div>
+
+      <div class="cp-block">
+        <div class="cp-title">目标机位</div>
+        <div id="target-spot" class="target-spot">未绑定。在「打卡点」页选中一个机位后会自动绑定。</div>
+      </div>
+
+      <button id="btn-snap" class="btn primary wide">拍摄</button>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============ 弹窗：设置 ============ -->
+<dialog id="dlg-settings" class="dlg">
+  <form method="dialog" class="dlg-body">
+    <h3>设置</h3>
+    <label class="field">高德 Web 服务 Key（可选，用于搜附近打卡点）
+      <input id="set-amap-key" type="text" placeholder="32 位十六进制字符串" autocomplete="off" />
+    </label>
+    <p class="tiny muted">Key 只保存在本机 localStorage，不上传任何服务器。申请地址：高德开放平台 → 应用管理 → 添加 Key → 服务平台选「Web服务」。</p>
+    <label class="field">姿势模型
+      <select id="set-model">
+        <option value="full">full（更准，9.4MB）</option>
+        <option value="lite">lite（更快，5.8MB）</option>
+      </select>
+    </label>
+    <div class="row-btns end">
+      <button value="cancel" class="btn">关闭</button>
+      <button id="btn-save-settings" value="default" class="btn primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 弹窗：新建机位 ============ -->
+<dialog id="dlg-spot" class="dlg">
+  <form method="dialog" class="dlg-body" id="form-spot">
+    <h3>存为机位</h3>
+    <label class="field">机位名<input id="sp-name" required placeholder="例如：西湖断桥东侧石栏" /></label>
+    <label class="field">类型
+      <select id="sp-type">
+        <option value="建筑">建筑</option><option value="街拍">街拍</option>
+        <option value="山海">山海</option><option value="室内">室内</option><option value="夜景">夜景</option>
+      </select>
+    </label>
+    <label class="field">推荐焦段（等效 mm）<input id="sp-focal" type="number" min="10" max="400" value="35" /></label>
+    <label class="field">机位高度
+      <select id="sp-height"><option>蹲姿</option><option selected>胸口</option><option>眼睛</option><option>举高</option></select>
+    </label>
+    <label class="field">推荐拍摄时段
+      <select id="sp-time"><option>日出后 1 小时</option><option selected>日落前 40 分钟</option><option>蓝调时刻</option><option>正午</option><option>不限</option></select>
+    </label>
+    <label class="field">备注<textarea id="sp-note" rows="2" placeholder="站位、光位、避开什么"></textarea></label>
+    <p class="tiny muted" id="sp-coord">坐标：未取到当前位置</p>
+    <div class="row-btns end">
+      <button value="cancel" class="btn">取消</button>
+      <button id="btn-save-spot" value="default" class="btn primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<canvas id="snap" hidden></canvas>
+<div id="toast" class="toast" hidden></div>
+
+<script src="./vendor/leaflet/leaflet.js"></script>
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
